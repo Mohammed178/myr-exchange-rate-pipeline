@@ -135,4 +135,3 @@ if __name__ == "__main__":
     print(f"dates: {df['date'].min()} to {df['date'].max()}")
     print(f"currencies: {df['currency'].nunique()}")
     print(f"rate types: {sorted(df['rate_type'].unique())}")
-    print(df.groupby("currency").size().loc[lambda s: s != 15])

@@ -18,8 +18,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client
 
-from Fetch import fetch_backfill, fetch_recent
-
+from fetch import fetch_backfill, fetch_recent
 
 RATES_TABLE = "exchange_rates"
 RUNS_TABLE = "pipeline_runs"
@@ -55,6 +54,28 @@ def finish_run(client, run_id, status, **fields):
     client.table(RUNS_TABLE).update(payload).eq("id", run_id).execute()
 
 
+# ---------- corrections ----------
+
+def fix_swapped_spreads(df):
+    """Some historical days have buying/selling labels swapped at source.
+    Where buying > selling and the middle rate sits between them, swap them back."""
+    wide = df.pivot_table(index=["date", "currency"], columns="rate_type", values="rate")
+    swapped = wide[
+        (wide["buying"] > wide["selling"])
+        & (wide["middle"] <= wide["buying"])
+        & (wide["middle"] >= wide["selling"])
+    ].index
+    if len(swapped) == 0:
+        return df
+    df = df.copy()
+    in_swapped = df.set_index(["date", "currency"]).index.isin(swapped)
+    df.loc[in_swapped, "rate_type"] = df.loc[in_swapped, "rate_type"].replace(
+        {"buying": "selling", "selling": "buying"}
+    )
+    print(f"Corrected {len(swapped)} swapped buying/selling pairs")
+    return df
+
+
 # ---------- validation ----------
 
 def validate(df):
@@ -87,6 +108,7 @@ def validate(df):
             # SQL checks 1 and 2 in 005_validation_checks.sql keep surfacing these.
             print(f"WARNING: {len(broken)} rows where buying <= middle <= selling fails:")
             print(broken.to_string())
+
     if problems:
         raise ValueError("Validation failed: " + "; ".join(problems))
 
@@ -118,26 +140,6 @@ def upsert_rates(client, df):
     return len(records)
 
 
-def fix_swapped_spreads(df):
-    """Some historical days have buying/selling labels swapped at source.
-    Where buying > selling and the middle rate sits between them, swap them back."""
-    wide = df.pivot_table(index=["date", "currency"], columns="rate_type", values="rate")
-    swapped = wide[
-        (wide["buying"] > wide["selling"])
-        & (wide["middle"] <= wide["buying"])
-        & (wide["middle"] >= wide["selling"])
-    ].index
-    if len(swapped) == 0:
-        return df
-    df = df.copy()
-    in_swapped = df.set_index(["date", "currency"]).index.isin(swapped)
-    df.loc[in_swapped, "rate_type"] = df.loc[in_swapped, "rate_type"].replace(
-        {"buying": "selling", "selling": "buying"}
-    )
-    print(f"Corrected {len(swapped)} swapped buying/selling pairs")
-    return df
-
-
 # ---------- entry point ----------
 
 def main():
@@ -157,7 +159,6 @@ def main():
             raise ValueError("API returned no rows")
 
         df = fix_swapped_spreads(df)
-        
         validate(df)
         upserted = upsert_rates(client, df)
 
