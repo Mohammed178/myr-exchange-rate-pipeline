@@ -1,0 +1,4 @@
+requests
+pandas
+supabase
+python-dotenv
