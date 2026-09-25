@@ -1,0 +1,55 @@
+// measures_page2.dax — Page 2 (Long-run trend) measures.
+// Paste the whole file into DAX query view, click Run to test,
+// then click "Update model with changes" to save.
+
+DEFINE
+    // First trading day after the USD peg ended (announced 21 Jul 2005).
+    // For currencies BNM started quoting later, this falls back to their first date.
+    MEASURE 'public exchange_rates'[Peg End Rate] =
+        VAR baseD =
+            CALCULATE (
+                MIN ( 'public exchange_rates'[date] ),
+                REMOVEFILTERS ( 'Date' ),
+                'public exchange_rates'[date] >= DATE ( 2005, 7, 21 )
+            )
+        RETURN
+            CALCULATE ( [Middle Rate], REMOVEFILTERS ( 'Date' ), 'public exchange_rates'[date] = baseD )
+
+    // Every currency rebased to 100 at the peg's end, so different scales share one chart.
+    // Above 100 = ringgit weaker against that currency than in July 2005.
+    MEASURE 'public exchange_rates'[Indexed to Peg End] =
+        DIVIDE ( [Middle Rate], [Peg End Rate] ) * 100
+
+    MEASURE 'public exchange_rates'[Change Since Peg %] =
+        DIVIDE ( [Latest Rate] - [Peg End Rate], [Peg End Rate] )
+
+    // Strongest ringgit = lowest monthly average rate for the selected currency
+    MEASURE 'public exchange_rates'[Strongest Month Text] =
+        VAR best =
+            TOPN ( 1, 'public v_monthly_summary', 'public v_monthly_summary'[avg_rate], ASC )
+        RETURN
+            FORMAT ( MAXX ( best, 'public v_monthly_summary'[month] ), "mmm yyyy" )
+                & "  ·  " & FORMAT ( MAXX ( best, 'public v_monthly_summary'[avg_rate] ), "0.0000" )
+
+    // Weakest ringgit = highest monthly average rate
+    MEASURE 'public exchange_rates'[Weakest Month Text] =
+        VAR worst =
+            TOPN ( 1, 'public v_monthly_summary', 'public v_monthly_summary'[avg_rate], DESC )
+        RETURN
+            FORMAT ( MAXX ( worst, 'public v_monthly_summary'[month] ), "mmm yyyy" )
+                & "  ·  " & FORMAT ( MAXX ( worst, 'public v_monthly_summary'[avg_rate] ), "0.0000" )
+
+    // Dynamic chart title that follows the currency slicer
+    MEASURE 'public exchange_rates'[Trend Title] =
+        SELECTEDVALUE ( 'Currency'[currency], "Selected currency" ) & "/MYR monthly average, with monthly high–low range"
+
+EVALUATE
+CALCULATETABLE (
+    ROW (
+        "Peg end rate", [Peg End Rate],
+        "Since peg", [Change Since Peg %],
+        "Strongest", [Strongest Month Text],
+        "Weakest", [Weakest Month Text]
+    ),
+    'Currency'[currency] = "USD"
+)

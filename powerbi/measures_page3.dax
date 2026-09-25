@@ -1,0 +1,66 @@
+// measures_page3.dax — Page 3 (Cost of exchange) measures.
+// Paste into DAX query view -> Run to test -> "Update model with changes".
+// v_spread.spread_pct and v_daily_change.pct_change are stored x100, hence the / 100.
+
+DEFINE
+    // Buy/sell spread as a share of the buying rate: what it costs to swap and swap back
+    MEASURE 'public exchange_rates'[Avg Spread %] =
+        DIVIDE ( AVERAGE ( 'public v_spread'[spread_pct] ), 100 )
+
+    // Average spread over the last 30 calendar days, ignoring date filters
+    MEASURE 'public exchange_rates'[Spread Last 30D %] =
+        VAR d =
+            CALCULATE ( MAX ( 'public v_spread'[date] ), REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Currency' ) )
+        RETURN
+            CALCULATE ( [Avg Spread %], REMOVEFILTERS ( 'Date' ), 'public v_spread'[date] > d - 30 )
+
+    // 30-day rolling average of the spread, drawn over the daily line on the spread chart
+    MEASURE 'public exchange_rates'[Spread 30D Avg %] =
+        CALCULATE (
+            [Avg Spread %],
+            DATESINPERIOD ( 'Date'[Date], MAX ( 'Date'[Date] ), -30, DAY )
+        )
+
+    // Volatility = standard deviation of daily % moves over the last 30 days
+    MEASURE 'public exchange_rates'[Volatility 30D %] =
+        VAR d =
+            CALCULATE ( MAX ( 'public v_daily_change'[date] ), REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Currency' ) )
+        RETURN
+            DIVIDE (
+                CALCULATE ( STDEV.S ( 'public v_daily_change'[pct_change] ), REMOVEFILTERS ( 'Date' ), 'public v_daily_change'[date] > d - 30 ),
+                100
+            )
+
+    // Same idea without the 30-day window: on a chart by month it gives each month's volatility
+    MEASURE 'public exchange_rates'[Volatility %] =
+        DIVIDE ( STDEV.S ( 'public v_daily_change'[pct_change] ), 100 )
+
+    // ---------- KPI card text (ignore the slicer: they rank all currencies) ----------
+    MEASURE 'public exchange_rates'[Cheapest To Exchange Text] =
+        VAR t = FILTER ( ADDCOLUMNS ( ALL ( 'Currency'[currency] ), "s", [Spread Last 30D %] ), NOT ISBLANK ( [s] ) )
+        VAR best = TOPN ( 1, t, [s], ASC )
+        RETURN
+            MAXX ( best, 'Currency'[currency] ) & "  ·  " & FORMAT ( MAXX ( best, [s] ), "0.00%" )
+
+    MEASURE 'public exchange_rates'[Costliest To Exchange Text] =
+        VAR t = FILTER ( ADDCOLUMNS ( ALL ( 'Currency'[currency] ), "s", [Spread Last 30D %] ), NOT ISBLANK ( [s] ) )
+        VAR worst = TOPN ( 1, t, [s], DESC )
+        RETURN
+            MAXX ( worst, 'Currency'[currency] ) & "  ·  " & FORMAT ( MAXX ( worst, [s] ), "0.00%" )
+
+    MEASURE 'public exchange_rates'[Most Volatile Text] =
+        VAR t = FILTER ( ADDCOLUMNS ( ALL ( 'Currency'[currency] ), "v", [Volatility 30D %] ), NOT ISBLANK ( [v] ) )
+        VAR top1 = TOPN ( 1, t, [v], DESC )
+        RETURN
+            MAXX ( top1, 'Currency'[currency] ) & "  ·  " & FORMAT ( MAXX ( top1, [v] ), "0.00%" ) & " daily"
+
+    MEASURE 'public exchange_rates'[Spread Title] =
+        SELECTEDVALUE ( 'Currency'[currency], "Selected currency" ) & " buy/sell spread over time (% of buying rate)"
+
+EVALUATE
+ROW (
+    "Cheapest", [Cheapest To Exchange Text],
+    "Costliest", [Costliest To Exchange Text],
+    "Most volatile", [Most Volatile Text],
+    "USD spread 30D", CALCULATE ( [Spread Last 30D %], 'Currency'[currency] = "USD" )
+)

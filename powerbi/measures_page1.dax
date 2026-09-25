@@ -1,0 +1,97 @@
+// measures.dax — Page 1 (Overview) measures for the Institutional Briefing report.
+// Paste this WHOLE file into Power BI's DAX query view, then click
+// "Update model with changes" to add every measure at once.
+// Table names assume the originals ('public exchange_rates' etc.).
+
+DEFINE
+    // ---------- base ----------
+    MEASURE 'public exchange_rates'[Middle Rate] =
+        CALCULATE (
+            AVERAGE ( 'public exchange_rates'[rate] ),
+            'public exchange_rates'[rate_type] = "middle"
+        )
+
+    MEASURE 'public exchange_rates'[Latest Date] =
+        CALCULATE ( MAX ( 'public exchange_rates'[date] ), REMOVEFILTERS ( 'Date' ) )
+
+    // Middle rate on the most recent trading day; respects Currency, ignores date filters
+    MEASURE 'public exchange_rates'[Latest Rate] =
+        VAR d = [Latest Date]
+        RETURN
+            CALCULATE ( [Middle Rate], REMOVEFILTERS ( 'Date' ), 'public exchange_rates'[date] = d )
+
+    // ---------- change vs a comparison date (last trading day on/before the target) ----------
+    MEASURE 'public exchange_rates'[Change 1D %] =
+        VAR d = [Latest Date]
+        VAR prevD =
+            CALCULATE ( MAX ( 'public exchange_rates'[date] ), REMOVEFILTERS ( 'Date' ), 'public exchange_rates'[date] < d )
+        VAR prev =
+            CALCULATE ( [Middle Rate], REMOVEFILTERS ( 'Date' ), 'public exchange_rates'[date] = prevD )
+        RETURN
+            DIVIDE ( [Latest Rate] - prev, prev )
+
+    MEASURE 'public exchange_rates'[Change 30D %] =
+        VAR d = [Latest Date]
+        VAR baseD =
+            CALCULATE ( MAX ( 'public exchange_rates'[date] ), REMOVEFILTERS ( 'Date' ), 'public exchange_rates'[date] <= d - 30 )
+        VAR base =
+            CALCULATE ( [Middle Rate], REMOVEFILTERS ( 'Date' ), 'public exchange_rates'[date] = baseD )
+        RETURN
+            DIVIDE ( [Latest Rate] - base, base )
+
+    MEASURE 'public exchange_rates'[Change YTD %] =
+        VAR d = [Latest Date]
+        VAR baseD =
+            CALCULATE (
+                MAX ( 'public exchange_rates'[date] ),
+                REMOVEFILTERS ( 'Date' ),
+                'public exchange_rates'[date] <= DATE ( YEAR ( d ) - 1, 12, 31 )
+            )
+        VAR base =
+            CALCULATE ( [Middle Rate], REMOVEFILTERS ( 'Date' ), 'public exchange_rates'[date] = baseD )
+        RETURN
+            DIVIDE ( [Latest Rate] - base, base )
+
+    // "1D +0.12%  ·  30D -0.45%  ·  YTD +1.20%"
+    MEASURE 'public exchange_rates'[KPI Subtitle] =
+        "1D " & FORMAT ( [Change 1D %], "+0.00%;-0.00%" )
+            & "  ·  30D " & FORMAT ( [Change 30D %], "+0.00%;-0.00%" )
+            & "  ·  YTD " & FORMAT ( [Change YTD %], "+0.00%;-0.00%" )
+
+    // ---------- largest moves today (v_daily_change stores pct_change x 100) ----------
+    MEASURE 'public exchange_rates'[Move Today %] =
+        VAR d =
+            CALCULATE ( MAX ( 'public v_daily_change'[date] ), REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Currency' ) )
+        RETURN
+            DIVIDE (
+                CALCULATE ( SUM ( 'public v_daily_change'[pct_change] ), REMOVEFILTERS ( 'Date' ), 'public v_daily_change'[date] = d ),
+                100
+            )
+
+    MEASURE 'public exchange_rates'[Move Today Abs] = ABS ( [Move Today %] )
+
+    // ---------- header and footer text ----------
+    MEASURE 'public exchange_rates'[Reporting Date Text] =
+        "Reporting date  " & FORMAT ( [Latest Date], "dd mmm yyyy" )
+
+    // last_run_at is stored in UTC; +8 hours converts it to MYT
+    MEASURE 'public exchange_rates'[Pipeline Status Text] =
+        VAR s = SELECTEDVALUE ( 'public v_pipeline_health'[last_run_status] )
+        VAR t = SELECTEDVALUE ( 'public v_pipeline_health'[last_run_at] )
+        RETURN
+            "Pipeline status: "
+                & IF ( s = "success", "Healthy", "Needs attention" )
+                & "  ·  last load " & FORMAT ( t + TIME ( 8, 0, 0 ), "dd mmm, hh:nn" ) & " MYT"
+
+// Quick test: running this query should return today's USD figures
+EVALUATE
+CALCULATETABLE (
+    ROW (
+        "Latest date", [Latest Date],
+        "USD rate", [Latest Rate],
+        "1D", [Change 1D %],
+        "30D", [Change 30D %],
+        "YTD", [Change YTD %]
+    ),
+    'Currency'[currency] = "USD"
+)

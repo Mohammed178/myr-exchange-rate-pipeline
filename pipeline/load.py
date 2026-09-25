@@ -13,7 +13,7 @@ Needs two environment variables (a local .env file, or GitHub Actions secrets):
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from dotenv import load_dotenv
 from supabase import create_client
@@ -25,6 +25,7 @@ RUNS_TABLE = "pipeline_runs"
 BATCH_SIZE = 1000                     # rows per upsert request
 VALID_RATE_TYPES = {"buying", "middle", "selling"}
 MIDDLE_ONLY = {"XDR"}                 # IMF SDR: BNM publishes a middle rate only
+CNY_FIRST_GOOD_DATE = date(2005, 5, 5)  # earlier CNY rates are wrong at source
 
 
 def get_client():
@@ -55,6 +56,16 @@ def finish_run(client, run_id, status, **fields):
 
 
 # ---------- corrections ----------
+
+def drop_known_bad_rows(df):
+    """Drop rows the source is known to have published wrongly.
+    CNY before 2005-05-05 is 3.80 x 8.2765 (the two USD pegs multiplied)
+    instead of the cross rate 3.80 / 8.2765. See sql/008_remove_bad_cny_2005.sql."""
+    bad = (df["currency"] == "CNY") & (df["date"] < CNY_FIRST_GOOD_DATE)
+    if bad.any():
+        print(f"Dropped {bad.sum()} known-bad CNY rows before {CNY_FIRST_GOOD_DATE}")
+    return df[~bad]
+
 
 def fix_swapped_spreads(df):
     """Some historical days have buying/selling labels swapped at source.
@@ -158,6 +169,7 @@ def main():
         if df.empty:
             raise ValueError("API returned no rows")
 
+        df = drop_known_bad_rows(df)
         df = fix_swapped_spreads(df)
         validate(df)
         upserted = upsert_rates(client, df)
